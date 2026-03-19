@@ -1,6 +1,6 @@
 // components/import/tabs/OrphanedTab.tsx
 
-import type { OrphanedAsset } from '../import/types'
+import type { OrphanedAsset } from '../../import/types'
 import Spinner     from '../ui/Spinner'
 import SearchInput from '../ui/SearchInput'
 

@@ -1,6 +1,6 @@
 // components/import/tabs/UnchangedAssetsTab.tsx
 
-import type { UnchangedAsset } from '../import/types'
+import type { UnchangedAsset } from '../../import/types'
 import AssetTable  from '../ui/AssetTable'
 import SearchInput from '../ui/SearchInput'
 

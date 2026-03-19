@@ -1,6 +1,6 @@
 // components/import/ui/TabBtn.tsx
 
-import type { Tab } from '../import/types'
+import type { Tab } from '../../import/types'
 
 interface Props {
   t:         Tab

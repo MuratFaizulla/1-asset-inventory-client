@@ -1,6 +1,6 @@
 // components/import/tabs/ChangedAssetsTab.tsx
 
-import type { ChangedAsset } from '../import/types'
+import type { ChangedAsset } from '../../import/types'
 import SearchInput from '../ui/SearchInput'
 
 interface Props {

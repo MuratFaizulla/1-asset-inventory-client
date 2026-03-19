@@ -1,6 +1,6 @@
 // components/import/ui/AssetTable.tsx
 
-import type { NewAsset, UnchangedAsset } from '../import/types'
+import type { NewAsset, UnchangedAsset } from '../../import/types'
 
 interface Props {
   items:     (NewAsset | UnchangedAsset)[]

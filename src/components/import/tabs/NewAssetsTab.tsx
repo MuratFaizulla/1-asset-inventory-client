@@ -1,6 +1,6 @@
 // components/import/tabs/NewAssetsTab.tsx
 
-import type { NewAsset } from '../import/types'
+import type { NewAsset } from '../../import/types'
 import AssetTable  from '../ui/AssetTable'
 import SearchInput from '../ui/SearchInput'
 
