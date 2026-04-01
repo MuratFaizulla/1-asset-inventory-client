@@ -29,6 +29,8 @@ export default function InventoryListPage() {
   const [showModal, setShowModal] = useState(false)
   const [locations, setLocations] = useState<Location[]>([])
   const [orgs, setOrgs] = useState<Organization[]>([])
+  const [faTypes, setFaTypes] = useState<string[]>([])
+  const [selectedFaTypes, setSelectedFaTypes] = useState<string[]>([])
   const [form, setForm] = useState({ name: '', locationId: '', organizationId: '', createdBy: '' })
   const [creating, setCreating] = useState(false)
   const [exporting, setExporting] = useState<number | null>(null)
@@ -38,7 +40,14 @@ export default function InventoryListPage() {
     api.get('/inventory').then(r => setSessions(r.data)).catch(() => {})
     api.get('/locations').then(r => setLocations(r.data))
     api.get('/locations/organizations').then(r => setOrgs(r.data))
+    api.get('/assets/grouped').then(r => setFaTypes(r.data.map((g: { name: string }) => g.name))).catch(() => {})
   }, [])
+
+  const toggleFaType = (t: string) => {
+    setSelectedFaTypes(prev =>
+      prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]
+    )
+  }
 
   const handleCreate = async () => {
     if (!form.name.trim()) return
@@ -48,10 +57,12 @@ export default function InventoryListPage() {
         name: form.name,
         locationId: form.locationId || undefined,
         organizationId: form.organizationId || undefined,
+        assetNames: selectedFaTypes.length > 0 ? selectedFaTypes : undefined,
         createdBy: form.createdBy || undefined,
       })
       setShowModal(false)
       setForm({ name: '', locationId: '', organizationId: '', createdBy: '' })
+      setSelectedFaTypes([])
       navigate(`/inventory/${res.data.id}`)
     } catch (e) {
       console.error(e)
@@ -236,6 +247,72 @@ export default function InventoryListPage() {
                 <option value="">Все организации</option>
                 {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Наименование ОС</span>
+                <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>
+                  {selectedFaTypes.length === 0
+                    ? 'все наименования'
+                    : `выбрано: ${selectedFaTypes.length}`}
+                </span>
+              </label>
+              <div style={{
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                maxHeight: 200,
+                overflowY: 'auto',
+                background: 'var(--bg3)',
+              }}>
+                {faTypes.length === 0 ? (
+                  <div style={{ padding: '12px 14px', fontSize: 13, color: 'var(--text3)' }}>
+                    Загрузка...
+                  </div>
+                ) : (
+                  faTypes.map(t => {
+                    const checked = selectedFaTypes.includes(t)
+                    return (
+                      <label
+                        key={t}
+                        onClick={() => toggleFaType(t)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '9px 14px', cursor: 'pointer',
+                          background: checked ? '#1d3a6a' : 'transparent',
+                          borderBottom: '1px solid var(--border)',
+                          userSelect: 'none',
+                        }}
+                      >
+                        <div style={{
+                          width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                          border: `2px solid ${checked ? '#3b82f6' : 'var(--border)'}`,
+                          background: checked ? '#3b82f6' : 'transparent',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          {checked && (
+                            <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+                              <path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 13, color: checked ? '#93c5fd' : 'var(--text)' }}>{t}</span>
+                      </label>
+                    )
+                  })
+                )}
+              </div>
+              {selectedFaTypes.length > 0 && (
+                <button
+                  onClick={() => setSelectedFaTypes([])}
+                  style={{
+                    marginTop: 6, fontSize: 12, color: 'var(--text3)',
+                    background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  }}
+                >
+                  Сбросить выбор
+                </button>
+              )}
             </div>
 
             <div className="modal-actions" style={{ gap: 10 }}>
