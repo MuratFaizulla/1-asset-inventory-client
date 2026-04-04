@@ -52,6 +52,17 @@ function normalize(s: string) {
   return s.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
+function fallbackCopy(text: string, done: () => void) {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0'
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  try { document.execCommand('copy'); done() } catch { /* ignore */ }
+  document.body.removeChild(ta)
+}
+
 export default function RelocationsPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -162,10 +173,16 @@ export default function RelocationsPage() {
 
   // Копировать текст в буфер обмена (key — уникальный ключ для иконки ✓)
   const copyText = useCallback((key: string, text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
+    const done = () => {
       setCopiedKey(key)
       setTimeout(() => setCopiedKey(null), 1500)
-    })
+    }
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done))
+    } else {
+      fallbackCopy(text, done)
+    }
   }, [])
 
   const getVerifyStatus = useCallback((item: RelocatedItem): VerifyStatus | null => {
