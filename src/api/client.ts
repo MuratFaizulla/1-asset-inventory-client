@@ -1,27 +1,16 @@
-// import axios from 'axios'
-
-// const host = window.location.hostname
-// const SERVER_PORT = 8888
-
-// export const API_BASE = (host === 'localhost' || host === '127.0.0.1')
-//   ? `http://localhost:${SERVER_PORT}`
-//   : `http://${host}:${SERVER_PORT}`
-
-// const api = axios.create({ baseURL: `${API_BASE}/api` })
-
-// export default api
-
-
-
 import axios from 'axios'
 
-const host = window.location.hostname
-const SERVER_PORT = 5173
+// Берём базовый URL из переменной окружения Vite.
+// В dev режиме: VITE_API_URL=http://localhost:8888/api
+// В prod: укажите адрес сервера в .env перед сборкой
+const baseURL = import.meta.env.VITE_API_URL ?? (() => {
+  const host = window.location.hostname
+  const SERVER_PORT = 8888
+  return `http://${host}:${SERVER_PORT}/api`
+})()
 
-export const API_BASE = (host === 'localhost' || host === '127.0.0.1')
-  ? `http://localhost:${SERVER_PORT}`
-  : `http://${host}:${SERVER_PORT}`
+export const API_BASE = baseURL.replace(/\/api$/, '')
 
-const api = axios.create({ baseURL: `http://10.35.14.13:5173/api` })
+const api = axios.create({ baseURL })
 
 export default api
