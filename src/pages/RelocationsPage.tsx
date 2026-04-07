@@ -23,9 +23,9 @@ interface RelocatedItem {
   }
 }
 
-type VerifyStatus = 'done' | 'not-done' | 'not-found'
+type VerifyStatus = 'done' | 'not-done' | 'wrong' | 'not-found'
 type SortKey = 'idx' | 'name' | 'date' | 'verify' | 'checked'
-type FilterKey = 'all' | 'done' | 'not-done' | 'not-found' | 'unchecked' | 'checked'
+type FilterKey = 'all' | 'done' | 'not-done' | 'wrong' | 'not-found' | 'unchecked' | 'checked'
 
 function parseNote(note: string | null) {
   if (!note) return { location: null, employee: null, comment: null }
@@ -50,6 +50,13 @@ function parseNote(note: string | null) {
 
 function normalize(s: string) {
   return s.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+// Сравнение имён с учётом сокращённых форм (1С часто хранит без отчества)
+function nameMatches(a: string, b: string): boolean {
+  const na = normalize(a)
+  const nb = normalize(b)
+  return na === nb || na.startsWith(nb + ' ') || nb.startsWith(na + ' ') || na.startsWith(nb) || nb.startsWith(na)
 }
 
 function fallbackCopy(text: string, done: () => void) {
@@ -77,7 +84,8 @@ export default function RelocationsPage() {
 
   // ── Верификация по Excel из 1С ──────────────────────────────────
   // Map: инвентарный номер → местонахождение в загруженном Excel
-  const [verifyMap, setVerifyMap]       = useState<Map<string, string> | null>(null)
+  const [verifyMap, setVerifyMap]         = useState<Map<string, string> | null>(null)
+  const [verifyEmpMap, setVerifyEmpMap]   = useState<Map<string, string> | null>(null)
   const [verifyFileName, setVerifyFileName] = useState<string | null>(null)
   const [verifying, setVerifying]       = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -188,15 +196,50 @@ export default function RelocationsPage() {
   const getVerifyStatus = useCallback((item: RelocatedItem): VerifyStatus | null => {
     if (!verifyMap) return null
     const parsed = parseNote(item.note)
-    if (!parsed.location) return null
+    if (!parsed.location && !parsed.employee) return null
+    if (!parsed.location && !verifyEmpMap) return null
 
-    const locationIn1C = verifyMap.get(item.asset.inventoryNumber)
-    if (locationIn1C === undefined) return 'not-found'
+    // Check file presence using location map (primary)
+    if (parsed.location) {
+      const locIn1C = verifyMap.get(item.asset.inventoryNumber)
+      if (locIn1C === undefined) return 'not-found'
+    }
 
-    return normalize(locationIn1C) === normalize(parsed.location) ? 'done' : 'not-done'
-  }, [verifyMap])
+    const statuses: Array<'done' | 'not-done' | 'wrong'> = []
+
+    if (parsed.location) {
+      const locIn1C = verifyMap.get(item.asset.inventoryNumber)!
+      if (normalize(locIn1C) === normalize(parsed.location)) {
+        statuses.push('done')
+      } else if (normalize(locIn1C) === normalize(item.asset.location.name)) {
+        statuses.push('not-done') // не изменено совсем
+      } else {
+        statuses.push('wrong')   // изменено, но не туда
+      }
+    }
+
+    if (parsed.employee && verifyEmpMap) {
+      const empIn1C = verifyEmpMap.get(item.asset.inventoryNumber)
+      if (empIn1C !== undefined) {
+        if (nameMatches(empIn1C, parsed.employee)) {
+          statuses.push('done')
+        } else if (nameMatches(empIn1C, item.asset.employee?.fullName ?? '')) {
+          statuses.push('not-done')
+        } else {
+          statuses.push('wrong')
+        }
+      }
+    }
+
+    if (statuses.length === 0) return null
+    if (statuses.includes('wrong'))    return 'wrong'
+    if (statuses.includes('not-done')) return 'not-done'
+    return 'done'
+  }, [verifyMap, verifyEmpMap])
 
   // ── Загрузка Excel из 1С для проверки ──────────────────────────
+  const EMPLOYEE_COLS = ['Подотчетное лицо', 'Сотрудник', 'МОЛ', 'Ответственный', 'Ответственное лицо']
+
   const handleVerifyFile = (file: File) => {
     setVerifying(true)
     setVerifyFileName(file.name)
@@ -208,13 +251,31 @@ export default function RelocationsPage() {
         const sheet = wb.Sheets[wb.SheetNames[0]]
         const rows  = XLSX.utils.sheet_to_json(sheet, { defval: null }) as Record<string, unknown>[]
 
-        const map = new Map<string, string>()
+        const locMap = new Map<string, string>()
+        const empMap = new Map<string, string>()
+        let empColFound = false
+
         for (const row of rows) {
           const inv = row['Инвентарный номер'] != null ? String(row['Инвентарный номер']).trim() : null
           const loc = row['Местонахождение']   != null ? String(row['Местонахождение']).trim()   : ''
-          if (inv) map.set(inv, loc)
+          if (!inv) continue
+          locMap.set(inv, loc)
+
+          // Ищем колонку сотрудника
+          for (const col of EMPLOYEE_COLS) {
+            if (row[col] != null) {
+              empMap.set(inv, String(row[col]).trim())
+              empColFound = true
+              break
+            }
+          }
         }
-        setVerifyMap(map)
+
+        setVerifyMap(locMap)
+        setVerifyEmpMap(empColFound ? empMap : null)
+        // Авто-сортировка по статусу чтобы проблемы были сверху
+        setSortKey('verify')
+        setSortDir(1)
       } catch {
         alert('Не удалось прочитать файл. Убедитесь, что это корректный Excel-файл.')
         setVerifyFileName(null)
@@ -243,7 +304,7 @@ export default function RelocationsPage() {
     else { setSortKey(key); setSortDir(1) }
   }
 
-  const verifyOrder: Record<string, number> = { 'not-done': 0, 'not-found': 1, 'done': 2 }
+  const verifyOrder: Record<string, number> = { 'wrong': 0, 'not-done': 1, 'not-found': 2, 'done': 3 }
 
   const q = search.toLowerCase().trim()
 
@@ -283,6 +344,7 @@ export default function RelocationsPage() {
   const verifyStats = verifyMap ? {
     done:     items.filter(i => getVerifyStatus(i) === 'done').length,
     notDone:  items.filter(i => getVerifyStatus(i) === 'not-done').length,
+    wrong:    items.filter(i => getVerifyStatus(i) === 'wrong').length,
     notFound: items.filter(i => getVerifyStatus(i) === 'not-found').length,
   } : null
 
@@ -377,22 +439,24 @@ export default function RelocationsPage() {
         </div>
       ) : (
         <>
-          {/* ── Инструкция ──────────────────────────────────────── */}
-          <div style={{
-            marginBottom: 12, padding: '12px 16px',
-            background: '#1e3a5f22', border: '1px solid var(--accent)',
-            borderRadius: 12,
-          }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--accent)', fontSize: 13 }}>
-              📋 Как обновить в 1С
+          {/* ── Инструкция — скрывается после загрузки файла ──────── */}
+          {!verifyMap && (
+            <div style={{
+              marginBottom: 12, padding: '12px 16px',
+              background: '#1e3a5f22', border: '1px solid var(--accent)',
+              borderRadius: 12,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 6, color: 'var(--accent)', fontSize: 13 }}>
+                📋 Как обновить в 1С
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.8 }}>
+                1. Скачайте Excel — кнопка "📥 Excel для 1С"<br />
+                2. В 1С откройте каждый ОС по инвентарному номеру<br />
+                3. Измените поле "Местонахождение" на значение из колонки "Новое местонахождение"<br />
+                4. Выгрузите обновлённый список ОС из 1С и загрузите ниже для проверки
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.8 }}>
-              1. Скачайте Excel — кнопка "📥 Excel для 1С"<br />
-              2. В 1С откройте каждый ОС по инвентарному номеру<br />
-              3. Измените поле "Местонахождение" на значение из колонки "Новое местонахождение"<br />
-              4. Выгрузите обновлённый список ОС из 1С и загрузите ниже для проверки
-            </div>
-          </div>
+          )}
 
           {/* ── Блок проверки по Excel из 1С ─────────────────────── */}
           <div style={{
@@ -437,29 +501,67 @@ export default function RelocationsPage() {
             </div>
 
             {/* Статистика верификации */}
-            {verifyStats && (
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                <span style={{ color: '#f87171', fontWeight: 600, fontSize: 13 }}>❌ Не изменено: {verifyStats.notDone}</span>
-                <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 13 }}>✅ Изменено: {verifyStats.done}</span>
-                {verifyStats.notFound > 0 && (
-                  <span style={{ color: '#fbbf24', fontWeight: 600, fontSize: 13 }}>❓ Нет в файле: {verifyStats.notFound}</span>
-                )}
-                {verifyStats.done > 0 && items.filter(i => !i.checkedAt && getVerifyStatus(i) === 'done').length > 0 && (
-                  <button
-                    onClick={() => autoMarkVerified(getVerifyStatus)}
-                    disabled={bulkLoading}
-                    style={{
-                      background: '#1a3a2a', border: '1px solid #2d6a45',
-                      color: '#4ade80', borderRadius: 8, padding: '5px 12px',
-                      cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                      opacity: bulkLoading ? 0.6 : 1,
-                    }}
-                  >
-                    {bulkLoading ? '⏳...' : `✅ Отметить все изменённые (${items.filter(i => !i.checkedAt && getVerifyStatus(i) === 'done').length})`}
-                  </button>
-                )}
-              </div>
-            )}
+            {verifyStats && (() => {
+              const total = verifyStats.done + verifyStats.notDone + verifyStats.wrong + verifyStats.notFound
+              const allDone = verifyStats.done === total && total > 0
+              const autoMarkCount = items.filter(i => !i.checkedAt && getVerifyStatus(i) === 'done').length
+              return (
+                <>
+                  {/* Баннер успеха */}
+                  {allDone && (
+                    <div style={{
+                      background: '#052e16', border: '1px solid #16a34a',
+                      borderRadius: 10, padding: '10px 14px', marginBottom: 10,
+                      color: '#4ade80', fontWeight: 700, fontSize: 13, textAlign: 'center',
+                    }}>
+                      🎉 Все перемещения обновлены в 1С!
+                    </div>
+                  )}
+
+                  {/* Прогресс */}
+                  <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+                    Обновлено в 1С:{' '}
+                    <span style={{ color: '#4ade80', fontWeight: 700 }}>{verifyStats.done}</span>
+                    {' '}из{' '}
+                    <span style={{ fontWeight: 700, color: 'var(--text2)' }}>{total}</span>
+                    {total > 0 && (
+                      <span style={{ marginLeft: 6, color: allDone ? '#4ade80' : 'var(--text3)' }}>
+                        ({Math.round((verifyStats.done / total) * 100)}%)
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {verifyStats.notDone > 0 && (
+                      <span style={{ color: '#f87171', fontWeight: 600, fontSize: 13 }}>❌ Не изменено: {verifyStats.notDone}</span>
+                    )}
+                    {verifyStats.wrong > 0 && (
+                      <span style={{ color: '#fb923c', fontWeight: 600, fontSize: 13 }}>⚠️ Неправильно: {verifyStats.wrong}</span>
+                    )}
+                    {verifyStats.done > 0 && (
+                      <span style={{ color: '#4ade80', fontWeight: 600, fontSize: 13 }}>✅ Изменено: {verifyStats.done}</span>
+                    )}
+                    {verifyStats.notFound > 0 && (
+                      <span style={{ color: '#fbbf24', fontWeight: 600, fontSize: 13 }}>❓ Нет в файле: {verifyStats.notFound}</span>
+                    )}
+                    {autoMarkCount > 0 && (
+                      <button
+                        onClick={() => autoMarkVerified(getVerifyStatus)}
+                        disabled={bulkLoading}
+                        style={{
+                          background: '#1a3a2a', border: '1px solid #2d6a45',
+                          color: '#4ade80', borderRadius: 8, padding: '5px 12px',
+                          cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          opacity: bulkLoading ? 0.6 : 1,
+                        }}
+                      >
+                        {bulkLoading ? '⏳...' : `✅ Отметить все изменённые (${autoMarkCount})`}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )
+            })()}
 
             {!verifyMap && (
               <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
@@ -575,6 +677,13 @@ export default function RelocationsPage() {
                               color: filter === 'not-done' ? '#f87171' : 'var(--text2)',
                               borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                             }}>❌ Не изменено ({verifyStats?.notDone ?? 0})</button>
+                          <button onClick={() => setFilter(filter === 'wrong' ? 'all' : 'wrong')}
+                            style={{
+                              background: filter === 'wrong' ? '#431407' : 'var(--bg3)',
+                              border: `1px solid ${filter === 'wrong' ? '#ea580c' : 'var(--border)'}`,
+                              color: filter === 'wrong' ? '#fb923c' : 'var(--text2)',
+                              borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                            }}>⚠️ Неправильно ({verifyStats?.wrong ?? 0})</button>
                           <button onClick={() => setFilter(filter === 'done' ? 'all' : 'done')}
                             style={{
                               background: filter === 'done' ? '#052e16' : 'var(--bg3)',
@@ -582,6 +691,15 @@ export default function RelocationsPage() {
                               color: filter === 'done' ? '#4ade80' : 'var(--text2)',
                               borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                             }}>✅ Изменено ({verifyStats?.done ?? 0})</button>
+                          {(verifyStats?.notFound ?? 0) > 0 && (
+                            <button onClick={() => setFilter(filter === 'not-found' ? 'all' : 'not-found')}
+                              style={{
+                                background: filter === 'not-found' ? '#1c1a04' : 'var(--bg3)',
+                                border: `1px solid ${filter === 'not-found' ? '#ca8a04' : 'var(--border)'}`,
+                                color: filter === 'not-found' ? '#fbbf24' : 'var(--text2)',
+                                borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                              }}>❓ Нет в файле ({verifyStats?.notFound ?? 0})</button>
+                          )}
                         </>}
                       </div>
                     </div>
@@ -608,9 +726,11 @@ export default function RelocationsPage() {
                 <div key={item.id} style={{
                   background: isChecked ? '#0a1a0a' : 'var(--bg2)',
                   border: `1px solid ${
-                    vs === 'done'     ? '#16a34a' :
-                    vs === 'not-done' ? '#dc2626' :
-                    isChecked         ? '#2d6a45' : 'var(--border)'
+                    vs === 'done'      ? '#16a34a' :
+                    vs === 'wrong'     ? '#ea580c' :
+                    vs === 'not-done'  ? '#dc2626' :
+                    vs === 'not-found' ? '#ca8a04' :
+                    isChecked          ? '#2d6a45' : 'var(--border)'
                   }`,
                   borderRadius: 12, padding: '12px 14px', position: 'relative',
                 }}>
@@ -640,11 +760,11 @@ export default function RelocationsPage() {
                     {vs && (
                       <span style={{
                         fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 6,
-                        background: vs === 'done' ? '#052e16' : vs === 'not-done' ? '#450a0a' : '#1c1a04',
-                        color:      vs === 'done' ? '#4ade80' : vs === 'not-done' ? '#f87171' : '#fbbf24',
-                        border:     `1px solid ${vs === 'done' ? '#16a34a' : vs === 'not-done' ? '#dc2626' : '#ca8a04'}`,
+                        background: vs === 'done' ? '#052e16' : vs === 'wrong' ? '#431407' : vs === 'not-done' ? '#450a0a' : '#1c1a04',
+                        color:      vs === 'done' ? '#4ade80' : vs === 'wrong' ? '#fb923c' : vs === 'not-done' ? '#f87171' : '#fbbf24',
+                        border:     `1px solid ${vs === 'done' ? '#16a34a' : vs === 'wrong' ? '#ea580c' : vs === 'not-done' ? '#dc2626' : '#ca8a04'}`,
                       }}>
-                        {vs === 'done' ? '✅ Изменено' : vs === 'not-done' ? '❌ Не изменено' : '❓ Нет в файле'}
+                        {vs === 'done' ? '✅ Изменено' : vs === 'wrong' ? '⚠️ Неправильно' : vs === 'not-done' ? '❌ Не изменено' : '❓ Нет в файле'}
                       </span>
                     )}
                   </div>
@@ -697,9 +817,10 @@ export default function RelocationsPage() {
                         📍 {parsed.location}
                       </div>
                       {/* Показываем что в загруженном файле */}
-                      {verifyMap && vs === 'not-done' && (
-                        <div style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>
-                          В файле сейчас: "{verifyMap.get(item.asset.inventoryNumber) || '—'}"
+                      {verifyMap && (vs === 'not-done' || vs === 'wrong') && (
+                        <div style={{ fontSize: 11, color: vs === 'wrong' ? '#fb923c' : '#f87171', marginTop: 4 }}>
+                          В файле 1С сейчас: "{verifyMap.get(item.asset.inventoryNumber) || '—'}"
+                          {vs === 'wrong' && <span style={{ marginLeft: 4, opacity: 0.7 }}>(≠ нужное)</span>}
                         </div>
                       )}
                     </div>
@@ -718,14 +839,24 @@ export default function RelocationsPage() {
                           </div>
                         </div>
                       )}
-                      {parsed.employee && (
-                        <div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>ПЕРЕДАТЬ СОТРУДНИКУ →</div>
-                          <div style={{ fontWeight: 600, color: 'var(--accent)', fontSize: 13 }}>
-                            🧑‍💼 {parsed.employee}
+                      {parsed.employee && (() => {
+                        const empIn1C = verifyEmpMap?.get(item.asset.inventoryNumber)
+                        const empOk = empIn1C !== undefined && nameMatches(empIn1C, parsed.employee)
+                        const empWrong = empIn1C !== undefined && !empOk && !nameMatches(empIn1C, item.asset.employee?.fullName ?? '')
+                        return (
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 2 }}>ПЕРЕДАТЬ СОТРУДНИКУ →</div>
+                            <div style={{ fontWeight: 600, color: empOk ? '#4ade80' : 'var(--accent)', fontSize: 13 }}>
+                              🧑‍💼 {parsed.employee}
+                            </div>
+                            {empIn1C && !empOk && (
+                              <div style={{ fontSize: 11, color: empWrong ? '#fb923c' : '#f87171', marginTop: 3 }}>
+                                В 1С сейчас: "{empIn1C}"{empWrong && <span style={{ marginLeft: 4, opacity: 0.7 }}>(≠ нужное)</span>}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )}
+                        )
+                      })()}
                     </div>
                   )}
 
@@ -834,6 +965,19 @@ export default function RelocationsPage() {
                                 display: 'block', marginBottom: 3,
                               }}>❌ Не изменено</span>
                               <span style={{ fontSize: 10, color: '#f87171', opacity: 0.8 }}>
+                                Сейчас: "{verifyMap.get(item.asset.inventoryNumber) || '—'}"
+                              </span>
+                            </div>
+                          )}
+                          {vs === 'wrong' && (
+                            <div>
+                              <span style={{
+                                background: '#431407', color: '#fb923c',
+                                border: '1px solid #ea580c',
+                                padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700,
+                                display: 'block', marginBottom: 3,
+                              }}>⚠️ Неправильно</span>
+                              <span style={{ fontSize: 10, color: '#fb923c', opacity: 0.8 }}>
                                 Сейчас: "{verifyMap.get(item.asset.inventoryNumber) || '—'}"
                               </span>
                             </div>
