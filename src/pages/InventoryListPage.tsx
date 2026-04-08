@@ -5,7 +5,7 @@ import api, { API_BASE } from '../api/client'
 interface Session {
   id: number
   name: string
-  status: 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
+  status: 'IN_PROGRESS' | 'COMPLETED' | 'CLOSED' | 'CANCELLED'
   startedAt: string
   finishedAt: string | null
   createdBy: string | null
@@ -34,6 +34,17 @@ export default function InventoryListPage() {
   const [form, setForm] = useState({ name: '', locationId: '', organizationId: '', createdBy: '' })
   const [creating, setCreating] = useState(false)
   const [exporting, setExporting] = useState<number | null>(null)
+  const [actionLoading, setActionLoading] = useState<number | null>(null)
+
+  // Модалка кода подтверждения (отмена / переоткрытие)
+  const [codeModal, setCodeModal] = useState<{
+    type: 'close' | 'cancel' | 'reopen'
+    sessionId: number
+    sessionName: string
+  } | null>(null)
+  const [codeInput, setCodeInput] = useState('')
+  const [codeError, setCodeError] = useState<string | null>(null)
+
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -85,14 +96,52 @@ export default function InventoryListPage() {
     }
   }
 
+  const openCodeModal = (e: React.MouseEvent, type: 'cancel' | 'reopen', session: Session) => {
+    e.stopPropagation()
+    setCodeInput('')
+    setCodeError(null)
+    setCodeModal({ type, sessionId: session.id, sessionName: session.name })
+  }
+
+  const handleCodeConfirm = async () => {
+    if (!codeModal || !codeInput.trim()) return
+    setActionLoading(codeModal.sessionId)
+    setCodeError(null)
+    try {
+      if (codeModal.type === 'close') {
+        await api.patch(`/inventory/${codeModal.sessionId}/close`, { code: codeInput.trim() })
+        setSessions(prev => prev.map(s =>
+          s.id === codeModal.sessionId ? { ...s, status: 'CLOSED' } : s
+        ))
+      } else if (codeModal.type === 'cancel') {
+        await api.patch(`/inventory/${codeModal.sessionId}/cancel`, { code: codeInput.trim() })
+        setSessions(prev => prev.map(s =>
+          s.id === codeModal.sessionId ? { ...s, status: 'CANCELLED' } : s
+        ))
+      } else {
+        await api.patch(`/inventory/${codeModal.sessionId}/reopen`, { code: codeInput.trim() })
+        setSessions(prev => prev.map(s =>
+          s.id === codeModal.sessionId ? { ...s, status: 'IN_PROGRESS', finishedAt: null } : s
+        ))
+      }
+      setCodeModal(null)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      setCodeError(msg || 'Неверный код')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const fmtDate = (d: string) => new Date(d).toLocaleDateString('ru-RU', {
     day: '2-digit', month: 'long', year: 'numeric'
   })
 
   const statusConfig = {
-    IN_PROGRESS: { label: 'В процессе', color: '#3b82f6', bg: '#1d3a6a', icon: '🔵' },
+    IN_PROGRESS: { label: 'В процессе', color: '#3b82f6',       bg: '#1d3a6a',   icon: '🔵' },
     COMPLETED:   { label: 'Завершён',   color: 'var(--accent2)', bg: '#064e3b55', icon: '✅' },
-    CANCELLED:   { label: 'Отменён',    color: 'var(--danger)', bg: '#4c0519', icon: '❌' },
+    CLOSED:      { label: 'Закрыт',     color: '#94a3b8',        bg: '#1e2535',   icon: '🔒' },
+    CANCELLED:   { label: 'Отменён',    color: 'var(--danger)',  bg: '#4c0519',   icon: '❌' },
   }
 
   return (
@@ -201,8 +250,54 @@ export default function InventoryListPage() {
                       whiteSpace: 'nowrap', minWidth: 52,
                     }}
                   >
-                    {exporting === s.id ? '⏳' : '📥 Excel'}
+                    {exporting === s.id ? '⏳' : '📥'}
                   </button>
+
+                  {/* Закрыть / Отменить (только IN_PROGRESS) */}
+                  {isActive && (
+                    <>
+                      <button
+                        onClick={e => openCodeModal(e, 'close', s)}
+                        disabled={actionLoading === s.id}
+                        style={{
+                          background: '#1e2535', border: '1px solid #334155',
+                          color: '#94a3b8', borderRadius: 10, padding: '10px 12px',
+                          cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {actionLoading === s.id ? '⏳' : '🔒 Закрыть'}
+                      </button>
+                      <button
+                        onClick={e => openCodeModal(e, 'cancel', s)}
+                        disabled={actionLoading === s.id}
+                        style={{
+                          background: '#2d0a0a', border: '1px solid #7f1d1d',
+                          color: '#f87171', borderRadius: 10, padding: '10px 12px',
+                          cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {actionLoading === s.id ? '⏳' : '✕ Отменить'}
+                      </button>
+                    </>
+                  )}
+
+                  {/* Переоткрыть (COMPLETED, CLOSED или CANCELLED) */}
+                  {(s.status === 'COMPLETED' || s.status === 'CLOSED' || s.status === 'CANCELLED') && (
+                    <button
+                      onClick={e => openCodeModal(e, 'reopen', s)}
+                      disabled={actionLoading === s.id}
+                      style={{
+                        background: '#1a2a3a', border: '1px solid #2d5a8a',
+                        color: '#60a5fa', borderRadius: 10, padding: '10px 12px',
+                        cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {actionLoading === s.id ? '⏳' : '↩ Открыть снова'}
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -321,6 +416,72 @@ export default function InventoryListPage() {
               <button className="btn btn-primary" style={{ flex: 2, minHeight: 48, fontSize: 15 }}
                 onClick={handleCreate} disabled={!form.name.trim() || creating}>
                 {creating ? 'Создаём...' : '✅ Создать акт'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка подтверждения кодом */}
+      {codeModal && (
+        <div className="modal-overlay" onClick={() => setCodeModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 400 }}>
+            <div className="modal-title" style={{
+              color: codeModal.type === 'cancel' ? '#f87171' : codeModal.type === 'close' ? '#94a3b8' : '#60a5fa'
+            }}>
+              {codeModal.type === 'close' ? '🔒 Закрыть сессию' : codeModal.type === 'cancel' ? '✕ Отменить сессию' : '↩ Открыть снова'}
+            </div>
+
+            <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16, lineHeight: 1.5 }}>
+              {codeModal.type === 'close'
+                ? <>Сессия <strong>«{codeModal.sessionName}»</strong> будет закрыта. Статусы ОС не изменятся — можно переоткрыть позже.</>
+                : codeModal.type === 'cancel'
+                ? <>Сессия <strong>«{codeModal.sessionName}»</strong> перейдёт в статус «Отменена».</>
+                : <>Сессия <strong>«{codeModal.sessionName}»</strong> будет переоткрыта. Все «Не найденные» ОС вернутся в «Не проверен».</>
+              }
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Код подтверждения</label>
+              <input
+                className="input"
+                style={{ width: '100%', minHeight: 48, fontFamily: 'monospace', fontSize: 20, letterSpacing: 6, textAlign: 'center', textTransform: 'uppercase' }}
+                placeholder="······"
+                value={codeInput}
+                onChange={e => { setCodeInput(e.target.value.toUpperCase()); setCodeError(null) }}
+                onKeyDown={e => e.key === 'Enter' && handleCodeConfirm()}
+                autoFocus
+                maxLength={6}
+              />
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>
+                Код доступен на главной странице сервера
+              </div>
+              {codeError && (
+                <div style={{ fontSize: 13, color: '#f87171', marginTop: 8, fontWeight: 600 }}>
+                  ⚠️ {codeError}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-actions" style={{ gap: 10 }}>
+              <button className="btn btn-outline" style={{ flex: 1, minHeight: 48 }}
+                onClick={() => setCodeModal(null)}>
+                Отмена
+              </button>
+              <button
+                className="btn"
+                style={{
+                  flex: 2, minHeight: 48, fontSize: 15, fontWeight: 600,
+                  background: codeModal.type === 'cancel' ? '#7f1d1d' : codeModal.type === 'close' ? '#1e2535' : '#1d3a6a',
+                  color: codeModal.type === 'cancel' ? '#f87171' : codeModal.type === 'close' ? '#94a3b8' : '#60a5fa',
+                  border: 'none',
+                }}
+                onClick={handleCodeConfirm}
+                disabled={!codeInput.trim() || actionLoading === codeModal.sessionId}
+              >
+                {actionLoading === codeModal.sessionId
+                  ? '⏳ Подождите...'
+                  : codeModal.type === 'close' ? '🔒 Закрыть' : codeModal.type === 'cancel' ? '✕ Отменить' : '↩ Открыть'}
               </button>
             </div>
           </div>

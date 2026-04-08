@@ -58,13 +58,10 @@ export default function AssetDetailPage() {
       const key      = photoKey(asset.name)
       const formData = new FormData()
       formData.append('photo', file)
-      const res = await fetch(`${API_BASE}/api/photos/${key}`, {
-        method: 'POST',
-        body:   formData,
-      })
-      if (res.ok) setPhotoUrl(`${API_BASE}/api/photos/${key}?t=${Date.now()}`)
-    } catch (e) {
-      console.error(e)
+      await api.post(`/photos/${key}`, formData)
+      setPhotoUrl(`${API_BASE}/api/photos/${key}?t=${Date.now()}`)
+    } catch {
+      alert('Не удалось загрузить фото. Проверьте формат файла (jpg, png, webp) и размер (до 10 МБ).')
     } finally {
       setUploading(false)
     }
@@ -73,16 +70,19 @@ export default function AssetDetailPage() {
   // ── Удаление фото ─────────────────────────────────────────────────────────────
   const handlePhotoDelete = async () => {
     if (!asset) return
-    const key = photoKey(asset.name)
-    await fetch(`${API_BASE}/api/photos/${key}`, { method: 'DELETE' })
-    setPhotoUrl(null)
+    try {
+      const key = photoKey(asset.name)
+      await api.delete(`/photos/${key}`)
+      setPhotoUrl(null)
+    } catch {
+      alert('Не удалось удалить фото')
+    }
   }
 
   // ── Render guards ─────────────────────────────────────────────────────────────
   if (loading) return <div className="loading">Загрузка...</div>
   if (!asset)  return <div className="empty"><div>ОС не найдено</div></div>
 
-  // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div>
       {/* Шапка */}
@@ -130,10 +130,6 @@ export default function AssetDetailPage() {
     </div>
   )
 }
-
-
-
-
 
 
 

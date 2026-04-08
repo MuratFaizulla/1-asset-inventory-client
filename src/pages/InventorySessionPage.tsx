@@ -62,8 +62,9 @@ export default function InventorySessionPage() {
     try {
       const res = await api.get(`/inventory/${id}`)
       setSession(res.data)
-    } catch (e) { console.error(e) }
-    finally { setLoading(false) }
+    } catch {
+      alert('Не удалось загрузить сессию. Проверьте подключение к серверу.')
+    } finally { setLoading(false) }
   }, [id])
 
   const fetchStatsByLocation = useCallback(async () => {
@@ -71,8 +72,9 @@ export default function InventorySessionPage() {
     try {
       const res = await api.get(`/inventory/${id}/stats/by-location`)
       setStatsByLocation(res.data)
-    } catch (e) { console.error(e) }
-    finally { setStatsLoading(false) }
+    } catch {
+      alert('Не удалось загрузить статистику по кабинетам')
+    } finally { setStatsLoading(false) }
   }, [id])
 
   useEffect(() => { fetchSession() }, [fetchSession])
@@ -304,8 +306,16 @@ export default function InventorySessionPage() {
           <div className="page-subtitle" style={{ fontSize: 12, marginTop: 4 }}>
             {session.location && <span>📍 {session.location.name} · </span>}
             {session.createdBy && <span>👤 {session.createdBy} · </span>}
-            <span style={{ color: isActive ? 'var(--accent)' : 'var(--accent2)' }}>
-              {isActive ? '🔵 В процессе' : '✅ Завершён'}
+            <span style={{
+              color: isActive ? 'var(--accent)'
+                : session.status === 'CLOSED' ? '#94a3b8'
+                : session.status === 'CANCELLED' ? 'var(--danger)'
+                : 'var(--accent2)'
+            }}>
+              {isActive ? '🔵 В процессе'
+                : session.status === 'CLOSED' ? '🔒 Закрыт'
+                : session.status === 'CANCELLED' ? '❌ Отменён'
+                : '✅ Завершён'}
             </span>
             {scannedCount > 0 && (
               <span style={{ color: 'var(--accent2)' }}> · ✅ {scannedCount} в этой сессии</span>
@@ -511,7 +521,9 @@ export default function InventorySessionPage() {
           employees={employees}
           onClose={() => setRelocateItem(null)}
           onConfirm={async (params) => {
-            await api.patch(`/inventory/${id}/asset/${relocateItem.asset.id}/location`, params)
+            const assetId = relocateItem.asset.id
+            if (!assetId) return
+            await api.patch(`/inventory/${id}/asset/${assetId}/location`, params)
             setRelocateItem(null)
             fetchSession()
           }}
