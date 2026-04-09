@@ -96,7 +96,7 @@ export default function InventoryListPage() {
     }
   }
 
-  const openCodeModal = (e: React.MouseEvent, type: 'cancel' | 'reopen', session: Session) => {
+  const openCodeModal = (e: React.MouseEvent, type: 'cancel' | 'reopen' | 'close', session: Session) => {
     e.stopPropagation()
     setCodeInput('')
     setCodeError(null)
